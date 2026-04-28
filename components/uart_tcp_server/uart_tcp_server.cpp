@@ -173,9 +173,9 @@ void UARTTCPServerComponent::write_array(const uint8_t *data, size_t len) {
   }
 }
 
-int UARTTCPServerComponent::available() {
+size_t UARTTCPServerComponent::available() {
   merge_rx_();
-  return (int) merged_ring_.available() + (has_peek_ ? 1 : 0);
+  return merged_ring_.available() + (has_peek_ ? 1 : 0);
 }
 
 bool UARTTCPServerComponent::read_array(uint8_t *data, size_t len) {
@@ -202,8 +202,9 @@ bool UARTTCPServerComponent::peek_byte(uint8_t *data) {
   return true;
 }
 
-void UARTTCPServerComponent::flush() {
+uart::UARTFlushResult UARTTCPServerComponent::flush() {
   // TCP is full-duplex. No hardware FIFO to drain.
+  return uart::UARTFlushResult::UART_FLUSH_RESULT_ASSUMED_SUCCESS;
 }
 
 }  // namespace esphome::uart_tcp_server
