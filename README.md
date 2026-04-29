@@ -1,14 +1,15 @@
 # esphome-uart-link
 
-ESPHome external components for UART transport. Bridge hardware serial ports to TCP networks and each other. Transport-agnostic: any UART consumer sees the standard `available()` / `read_array()` / `write_array()` interface regardless of whether bytes come from GPIO pins, a TCP socket, or another UART.
+ESPHome external components for UART interconnection. Bridges hardware serial ports to TCP networks and each other. 
+Transport-agnostic: any UART consumer sees the standard `available()` / `read_array()` / `write_array()` interface regardless of whether bytes come from GPIO pins, a TCP socket, or another UART.
 
 ## Components
 
 | Component | Purpose |
 |---|---|
-| **uart_tcp_client** | Outbound TCP client. *Is* a `UARTComponent`; use as a drop-in `uart_id` for any UART consumer. |
-| **uart_tcp_server** | TCP server. *Is* a `UARTComponent`; TCP clients read/write bytes through the standard UART interface. |
-| **uart_bridge** | Bidirectional byte forwarder between any two `UARTComponent`s. |
+| **uart_tcp_client** | Outbound TCP client which *is* a `UARTComponent`<br>use as a drop-in `uart_id` for any UART consumer. |
+| **uart_tcp_server** | TCP server which *is* a `UARTComponent`<br>connected clients' data is available through the standard UART interface. |
+| **uart_bridge** | Bidirectional byte forwarder between any two `UARTComponents`. |
 | **uart_common** | Internal SPSC ring buffer (no user-facing config). |
 
 ```mermaid
@@ -102,7 +103,7 @@ uart_bridge:
 
 ## Quick Examples
 
-### Connect a UART component to a remote serial port over TCP
+### Connect a UART component to a remote host, such as an ethernet serial bridge over TCP
 
 `uart_tcp_client` acts as a `UARTComponent`. Point any UART consumer at it:
 
