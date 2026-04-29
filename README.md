@@ -95,7 +95,7 @@ uart_bridge:
 | A | B | Use Case |
 |---|---|---|
 | hardware UART | hardware UART | RS485 ↔ RS232 protocol converter |
-| hardware UART | tcp_server | Serial-to-network bridge (replaces socat/ser2net) |
+| hardware UART | tcp_server | Serial-to-network bridge (raw bytes, fixed baud rate) |
 | tcp_client | hardware UART | Remote serial port consumer |
 | tcp_client | tcp_server | Network serial proxy/repeater |
 | tcp_server | tcp_server | Multi-party bus tap |
@@ -168,6 +168,14 @@ uart_bridge:
 ### Backpressure
 
 `uart_bridge` has no flow control. If a destination can't keep up, bytes buffer in its transport layer (DMA/FIFO for hardware UART, AsyncClient send buffer for TCP). The bridge assumes both sides can keep up. For very high baud rates, increase `buffer_size`.
+
+### Raw byte stream — no flow control or RFC 2217
+
+The TCP transport carries raw bytes only. It does not implement RFC 2217 (telnet COM port control), hardware flow control signals (RTS/CTS, DTR/DSR), or baud rate negotiation over the network. The hardware UART baud rate is set once in YAML and stays fixed.
+
+This means:
+- **Works well:** protocols that use a fixed baud rate and don't depend on modem control signals (Modbus RTU, most smart meters, HVAC serial, BMS, RS485 buses, raw data streaming).
+- **Doesn't work:** scenarios that require changing baud rates mid-session (e.g., the 1200-baud reset trick some bootloaders use) or toggling DTR/RTS from the remote end (e.g., `esphome upload` for some platforms). For those, use a USB connection or a full RFC 2217 bridge like ser2net.
 
 ### Poll-based limitation
 
