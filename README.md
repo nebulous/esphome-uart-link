@@ -105,6 +105,79 @@ uart_bridge:
 
 ## Common Examples
 
+### Virtual serial cable over WiFi (two ESPs)
+
+Replace a serial cable with two ESPs talking over WiFi.
+ESP A sits next to the serial device and bridges its hardware UART to a TCP port.
+ESP B connects to A over WiFi and presents the remote UART to any ESPHome component.
+Any UART consumer on ESP B sees the device as if it were locally connected.
+
+```mermaid
+flowchart LR
+    subgraph "ESP A (near device)"
+        DEV["serial device"] <-->|"GPIO"| HW["uart<br/>(hardware)"]
+        HW <-->|"uart_bridge"| SRV["uart_tcp_server<br/>:5000"]
+    end
+    SRV <-->|"WiFi / TCP"| CLI
+    subgraph "ESP B (anywhere)"
+        CLI["uart_tcp_client"] -->|"uart_id"| CONSUMER["modbus_controller<br/>or any UART consumer"]
+    end
+```
+
+**ESP A** — connected to the serial device, listening on TCP:
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/nebulous/esphome-uart-link
+
+uart:
+  id: device_uart
+  tx_pin: GPIO17
+  rx_pin: GPIO18
+  baud_rate: 9600
+
+uart_tcp_server:
+  id: tcp_link
+  port: 5000
+  client_mode: exclusive
+
+uart_bridge:
+  uart_a: device_uart
+  uart_b: tcp_link
+```
+
+**ESP B** — connects to ESP A, presents the remote UART to any consumer:
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/nebulous/esphome-uart-link
+
+uart_tcp_client:
+  id: remote_uart
+  host: esp-a.local
+  port: 5000
+
+# Use remote_uart like any local UART — modbus, meters, sensors, etc.
+modbus_controller:
+  uart_id: remote_uart
+```
+
+No serial cable, no socat, no ser2net. Just two ESPs and WiFi.
+Each ESP only needs power; the serial device can be anywhere on the network.
+
+**Common applications:**
+- RS485 Modbus devices in remote locations (solar inverters, smart meters, BMS)
+- Zigbee coordinator serial bridge (ZHA / Zigbee2MQTT over WiFi)
+- HVAC serial connections (Mitsubishi, Daikin) where running a cable is impractical
+- Any serial device you'd rather not sit next to
+
+**Caveat:** This is only as reliable as your WiFi.
+For critical or high-throughput links, consider a wired Ethernet ESP or a physical cable.
+
 ### Connect a UART component to a remote host, such as an ethernet serial bridge over TCP
 
 ```mermaid
@@ -333,10 +406,7 @@ One consumer happens to be a local `uart_tcp_client`.
   Serial over two network hops. It works, but adds latency at each hop
   and you should probably just run a longer cable.
 
-- **tcp_server as a UART interconnect between two ESPs:**
-  ESP A runs tcp_server, ESP B runs tcp_client pointed at A and bridges it to a hardware UART.
-  Both sides read/write through their respective UARTs.
-  It's a wireless serial cable, with all the reliability of WiFi.
+- **Two ESPs bridged as a wireless serial cable:** see the "Virtual serial cable over WiFi" example above.
 
 ## Design Notes
 
