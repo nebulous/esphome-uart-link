@@ -12,6 +12,8 @@ Transport-agnostic: any UART consumer sees the standard `available()` / `read_ar
 | **uart_bridge** | Bidirectional byte forwarder between any two `UARTComponents`. |
 | **uart_common** | Internal SPSC ring buffer (no user-facing config). |
 
+All three configurable components support multiple instances using standard ESPHome list syntax (`-` prefix with unique `id`s).
+
 ```mermaid
 graph TD
     bridge["uart_bridge<br/>(A ◄──► B)"]
@@ -105,6 +107,15 @@ uart_bridge:
 
 ### Connect a UART component to a remote host, such as an ethernet serial bridge over TCP
 
+```mermaid
+flowchart BT
+    subgraph ESP
+        MC[modbus_controller] -->|"uart_id = remote_uart"| C[uart_tcp_client]
+    end
+    C -->|"TCP connect"| R["remote host:5000"]
+    R -.->|"bytes back"| C
+```
+
 `uart_tcp_client` acts as a `UARTComponent`. Point any UART consumer at it:
 
 ```yaml
@@ -118,6 +129,15 @@ modbus_controller:
 ```
 
 ### Expose a hardware serial port over the network
+
+```mermaid
+flowchart TD
+    subgraph ESP
+        HW[uart GPIO] <-->|"uart_bridge"| S[uart_tcp_server]
+    end
+    R["remote client"] -->|"TCP connect"| S
+    S -.->|"bytes back"| R
+```
 
 `uart_tcp_server` is a UARTComponent backed by TCP. Use `uart_bridge` to connect it to a hardware UART:
 
@@ -142,6 +162,11 @@ Then from any machine on the network: `telnet esp-device.local 5000`
 
 ### Bridge two hardware UARTs
 
+```mermaid
+flowchart LR
+    RS485["rs485_bus<br/>38400 baud"] <-->|"uart_bridge"| RS232["rs232_bus<br/>9600 baud"]
+```
+
 Protocol conversion between two serial buses running at different speeds:
 
 ```yaml
@@ -159,6 +184,39 @@ uart_bridge:
   uart_a: rs485_bus
   uart_b: rs232_bus
 ```
+
+### Use a TCP server as a virtual UART (no hardware serial, no bridge)
+
+```mermaid
+flowchart BT
+    subgraph ESP
+        BTN["button: Ping"] -->|"uart.write"| S[uart_tcp_server]
+    end
+    R["telnet client"] -->|"TCP connect"| S
+    S -.->|"bytes back"| R
+```
+
+`uart_tcp_server` can be used directly as a `uart_id` — no hardware UART or `uart_bridge` needed. The TCP clients *are* the serial device. Any automation that writes to a UART can write to it; if no clients are connected, writes are silently dropped.
+
+```yaml
+uart_tcp_server:
+  id: log_uart
+  port: 2323
+  max_clients: 4
+  client_mode: fanout
+
+button:
+  - platform: template
+    name: "Ping"
+    on_press:
+      - uart.write:
+          id: log_uart
+          data: "Hello from ESP!\r\n"
+```
+
+Then from any machine on the network: `telnet my-esp.local 2323` — press the button and the text appears in your telnet session.
+
+This pattern scales to any UART consumer component that accepts a `uart_id`. See [InfinitESP](https://github.com/nebulous/infinitesp) for a production example: a custom `sam_ascii` component uses `uart_tcp_server` directly as its UART to expose an HVAC CLI over telnet.
 
 ## Design Notes
 

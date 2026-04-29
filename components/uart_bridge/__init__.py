@@ -4,6 +4,7 @@ from esphome.components import uart
 from esphome.const import CONF_ID
 
 CODEOWNERS = ["@nebulous"]
+MULTI_CONF = True
 AUTO_LOAD = ["uart"]
 
 CONF_UART_A = "uart_a"

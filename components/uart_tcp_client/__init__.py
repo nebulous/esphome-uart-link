@@ -17,6 +17,8 @@ UARTTCPClientComponent = uart_tcp_client_ns.class_(
     "UARTTCPClientComponent", uart.UARTComponent, cg.Component
 )
 
+MULTI_CONF = True
+
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(UARTTCPClientComponent),
     cv.Required(CONF_HOST): cv.string,

@@ -23,6 +23,8 @@ CLIENT_MODES = {
     "exclusive": ClientMode.CLIENT_MODE_EXCLUSIVE,
 }
 
+MULTI_CONF = True
+
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(UARTTCPServerComponent),
     cv.Required(CONF_PORT): cv.uint16_t,
