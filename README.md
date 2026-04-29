@@ -158,7 +158,7 @@ uart_bridge:
   uart_b: network_port
 ```
 
-Then from any machine on the network: `telnet esp-device.local 5000`
+Then from any machine on the network: `nc esp-device.local 5000`
 
 ### Bridge two hardware UARTs
 
@@ -192,11 +192,14 @@ flowchart BT
     subgraph ESP
         BTN["button: Ping"] -->|"uart.write"| S[uart_tcp_server]
     end
-    R["telnet client"] -->|"TCP connect"| S
+    R["nc client"] -->|"TCP connect"| S
     S -.->|"bytes back"| R
 ```
 
-`uart_tcp_server` can be used directly as a `uart_id` — no hardware UART or `uart_bridge` needed. The TCP clients *are* the serial device. Any automation that writes to a UART can write to it; if no clients are connected, writes are silently dropped.
+`uart_tcp_server` can be used directly as a `uart_id` — no hardware UART or `uart_bridge` needed.
+The TCP clients *are* the serial device.
+Any automation that writes to a UART can write to it.
+If no clients are connected, writes are silently dropped.
 
 ```yaml
 uart_tcp_server:
@@ -214,31 +217,160 @@ button:
           data: "Hello from ESP!\r\n"
 ```
 
-Then from any machine on the network: `telnet my-esp.local 2323` — press the button and the text appears in your telnet session.
+Then from any machine on the network: `nc my-esp.local 2323`
+Press the button and the text appears in your nc session.
 
-This pattern scales to any UART consumer component that accepts a `uart_id`. See [InfinitESP](https://github.com/nebulous/infinitesp) for a production example: a custom `sam_ascii` component uses `uart_tcp_server` directly as its UART to expose an HVAC CLI over telnet.
+This pattern scales to any UART consumer component that accepts a `uart_id`.
+See [InfinitESP](https://github.com/nebulous/infinitesp) for a production example:
+a custom `sam_ascii` component uses `uart_tcp_server` directly as its UART to expose an HVAC CLI over the network.
 
 ## Design Notes
 
 ### Thread safety
 
-`uart_tcp_client` and `uart_tcp_server` receive data in TCP callbacks that fire from a TCP thread (ESP32) or the main loop (ESP8266). The SPSC ring buffer in `uart_common` handles the producer/consumer split: TCP callback writes, main loop reads. No mutex needed.
+`uart_tcp_client` and `uart_tcp_server` receive data in TCP callbacks that fire from
+a TCP thread (ESP32) or the main loop (ESP8266).
+The SPSC ring buffer in `uart_common` handles the producer/consumer split:
+TCP callback writes, main loop reads. No mutex needed.
 
 ### Backpressure
 
-`uart_bridge` has no flow control. If a destination can't keep up, bytes buffer in its transport layer (DMA/FIFO for hardware UART, AsyncClient send buffer for TCP). The bridge assumes both sides can keep up. For very high baud rates, increase `buffer_size`.
+`uart_bridge` has no flow control.
+If a destination can't keep up, bytes buffer in its transport layer
+(DMA/FIFO for hardware UART, AsyncClient send buffer for TCP).
+The bridge assumes both sides can keep up.
+For very high baud rates, increase `buffer_size`.
 
 ### Raw byte stream — no flow control or RFC 2217
 
-The TCP transport carries raw bytes only. It does not implement RFC 2217 (telnet COM port control), hardware flow control signals (RTS/CTS, DTR/DSR), or baud rate negotiation over the network. The hardware UART baud rate is set once in YAML and stays fixed.
+The TCP transport carries raw bytes only.
+It does not implement RFC 2217 (telnet COM port control),
+hardware flow control signals (RTS/CTS, DTR/DSR),
+or baud rate negotiation over the network.
+The hardware UART baud rate is set once in YAML and stays fixed.
 
 This means:
-- **Works well:** protocols that use a fixed baud rate and don't depend on modem control signals (Modbus RTU, most smart meters, HVAC serial, BMS, RS485 buses, raw data streaming).
-- **Doesn't work:** scenarios that require changing baud rates mid-session (e.g., the 1200-baud reset trick some bootloaders use) or toggling DTR/RTS from the remote end (e.g., `esphome upload` for some platforms). For those, use a USB connection or a full RFC 2217 bridge like ser2net.
+- **Works well:**
+  protocols that use a fixed baud rate and don't depend on modem control signals
+  (Modbus RTU, most smart meters, HVAC serial, BMS, RS485 buses, raw data streaming).
+- **Doesn't work:**
+  scenarios that require changing baud rates mid-session
+  (e.g., the 1200-baud reset trick some bootloaders use)
+  or toggling DTR/RTS from the remote end
+  (e.g., `esphome upload` for some platforms).
+  For those, use a USB connection or a full RFC 2217 bridge like ser2net.
 
 ### Poll-based limitation
 
-ESPHome's UART API is purely poll-based (`available()` / `read_array()`). There are no RX callbacks. The bridge must live in `loop()`, which fires every few ms. At 115200 baud (~11.5 bytes/ms) and below, loop timing shouldn't be the bottleneck on ESP32 or ESP8266. The UART FIFO and driver-level buffering handle it comfortably. At higher rates (460800+), the gap between `loop()` invocations can exceed the hardware FIFO depth, and you may need to shrink the loop interval or increase `buffer_size`.
+ESPHome's UART API is purely poll-based (`available()` / `read_array()`).
+There are no RX callbacks.
+The bridge must live in `loop()`, which fires every few ms.
+At 115200 baud (~11.5 bytes/ms) and below, loop timing shouldn't be the bottleneck
+on ESP32 or ESP8266. The UART FIFO and driver-level buffering handle it comfortably.
+At higher rates (460800+), the gap between `loop()` invocations can exceed
+the hardware FIFO depth, and you may need to shrink the loop interval or increase `buffer_size`.
+
+## Multi-Tap / Weird Topologies / Bad Ideas
+
+Because `uart_tcp_client` and `uart_tcp_server` are both full `UARTComponent` instances,
+they can be composed in ways that go beyond simple point-to-point bridging.
+Some of these are genuinely useful. Some are just interesting.
+
+### Loopback multi-tap (SPMC via self-connection)
+
+ESPHome's UART is poll-based. Once bytes are read, they're gone.
+You can't have two components reading from the same hardware UART.
+But you *can* bridge the hardware UART to a `uart_tcp_server` in fanout mode,
+then have a `uart_tcp_client` on the same ESP connect back to that server.
+The tcp_server fans bytes out to all clients, one of which is the local tcp_client.
+The actual UART consumer reads from the tcp_client.
+
+This gives you a live read-only tap alongside a working UART consumer,
+useful for debugging serial protocols in real time without disrupting the component
+that's parsing them.
+
+```mermaid
+flowchart TD
+    radar["LD2450 radar"] -->|"hardware serial"| uartbus["uart_bus\n(GPIO)"]
+    uartbus -->|"uart_bridge"| tap["uart_tcp_server\n:5000 fanout"]
+    tap -->|"TCP connect"| consumer["uart_tcp_client\n127.0.0.1:5000"]
+    tap -->|"TCP connect"| nc["nc esp.local 5000\ndebug viewer"]
+    consumer -->|"uart_id"| ld2450["ld2450 component"]
+```
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/nebulous/esphome-uart-link
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO5
+  rx_pin: GPIO4
+  baud_rate: 256000
+
+uart_tcp_server:
+  id: radar_tap
+  port: 5000
+  client_mode: fanout
+  max_clients: 4
+
+uart_tcp_client:
+  id: radar_consumer
+  host: 127.0.0.1
+  port: 5000
+  reconnect_interval: 2s
+
+uart_bridge:
+  uart_a: uart_bus
+  uart_b: radar_tap
+
+ld2450:
+  id: ld2450_radar
+  uart_id: radar_consumer   # reads via the loopback TCP client
+  throttle: 100ms
+```
+
+Then `nc esp.local 5000` gives you a live raw byte stream
+while the ld2450 component works normally.
+
+**Why this works:**
+`uart_tcp_server` in fanout mode is inherently SPMC (single producer, multiple consumers).
+The hardware UART produces once, the server fans out to N consumers.
+One consumer happens to be a local `uart_tcp_client`.
+
+**Caveats:**
+
+- The `uart_tcp_client` stall detector will force a reconnect after 15 seconds of silence.
+  If the serial device goes quiet for extended periods, you'll get reconnect storms.
+  Extend or disable the stall timeout for this use case.
+
+- Every byte travels through the bridge, into the TCP server, across lwIP loopback,
+  into the TCP client, through its ring buffer, and finally to the component.
+  There's a latency and memory cost. Fine for 256000 baud and below,
+  probably not what you want for high-throughput or latency-sensitive protocols.
+
+- No flow control. If the consumer is slow, its ring buffer fills and bytes are lost.
+  Same as any UART overflow, but now there are two ring buffers in the path.
+
+### Other questionable ideas
+
+- **uart_bridge between two tcp_servers:**
+  Multi-party bus tap with no hardware UART at all.
+  Two different ESPs each run a tcp_server, one runs a bridge,
+  and external clients connect to both.
+  Useful if you want to snoop on a conversation between two TCP serial devices.
+
+- **Chained bridges:**
+  Bridge hardware UART → tcp_client → (network) → tcp_server → bridge → hardware UART.
+  Serial over two network hops. It works, but adds latency at each hop
+  and you should probably just run a longer cable.
+
+- **tcp_server as a UART interconnect between two ESPs:**
+  ESP A runs tcp_server, ESP B runs tcp_client pointed at A and bridges it to a hardware UART.
+  Both sides read/write through their respective UARTs.
+  It's a wireless serial cable, with all the reliability of WiFi.
 
 ## License
 
