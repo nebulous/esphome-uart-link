@@ -4,10 +4,15 @@
 namespace esphome::uart_tcp_server {
 
 std::string UARTTCPServerComponent::remote_addr_(AsyncClient *client) {
-  uint32_t addr = client->getRemoteAddress();
   char buf[24];
+#if defined(USE_ESP8266)
+  auto ip = client->remoteIP();
+  snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u", ip[0], ip[1], ip[2], ip[3], client->remotePort());
+#else
+  uint32_t addr = client->getRemoteAddress();
   snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u", addr & 0xFF, (addr >> 8) & 0xFF, (addr >> 16) & 0xFF,
            (addr >> 24) & 0xFF, client->remotePort());
+#endif
   return buf;
 }
 
