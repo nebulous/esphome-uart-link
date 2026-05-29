@@ -31,7 +31,7 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_MAX_CLIENTS, default=2): cv.All(cv.uint8_t, cv.Range(min=1, max=16)),
     cv.Optional(CONF_RX_BUFFER_SIZE, default=4096): cv.All(cv.validate_bytes, cv.uint16_t),
     cv.Optional(CONF_CLIENT_MODE, default="fanout"): cv.enum(CLIENT_MODES, lower=True),
-    cv.Optional(CONF_IDLE_TIMEOUT, default="0ms"): cv.update_interval,
+    cv.Optional(CONF_IDLE_TIMEOUT, default="0ms"): cv.All(cv.time_period, cv.time_period_in_milliseconds_),
 }).extend(cv.COMPONENT_SCHEMA)
 
 

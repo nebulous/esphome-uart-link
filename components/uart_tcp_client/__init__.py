@@ -11,6 +11,7 @@ DEPENDENCIES = ["network"]
 
 CONF_RX_BUFFER_SIZE = "rx_buffer_size"
 CONF_RECONNECT_INTERVAL = "reconnect_interval"
+CONF_STALL_TIMEOUT = "stall_timeout"
 
 uart_tcp_client_ns = cg.esphome_ns.namespace("uart_tcp_client")
 UARTTCPClientComponent = uart_tcp_client_ns.class_(
@@ -25,6 +26,7 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_PORT): cv.uint16_t,
     cv.Optional(CONF_RX_BUFFER_SIZE, default=4096): cv.All(cv.validate_bytes, cv.uint16_t),
     cv.Optional(CONF_RECONNECT_INTERVAL, default="5s"): cv.update_interval,
+    cv.Optional(CONF_STALL_TIMEOUT, default="15s"): cv.update_interval,
 }).extend(cv.COMPONENT_SCHEMA)
 
 
@@ -34,4 +36,5 @@ async def to_code(config):
     cg.add(var.set_port(config[CONF_PORT]))
     cg.add(var.set_rx_buffer_size(config[CONF_RX_BUFFER_SIZE]))
     cg.add(var.set_reconnect_interval(config[CONF_RECONNECT_INTERVAL]))
+    cg.add(var.set_stall_timeout(config[CONF_STALL_TIMEOUT]))
     await cg.register_component(var, config)

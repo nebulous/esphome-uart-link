@@ -1,6 +1,6 @@
 # esphome-uart-link
 
-ESPHome external components for UART interconnection. Bridges hardware serial ports to TCP networks and each other. 
+ESPHome external components for UART interconnection. Bridges hardware serial ports to TCP networks and each other.
 Transport-agnostic: any UART consumer sees the standard `available()` / `read_array()` / `write_array()` interface regardless of whether bytes come from GPIO pins, a TCP socket, or another UART.
 
 ## Components
@@ -9,17 +9,18 @@ Transport-agnostic: any UART consumer sees the standard `available()` / `read_ar
 |---|---|
 | **uart_tcp_client** | Outbound TCP client which *is* a `UARTComponent`<br>use as a drop-in `uart_id` for any UART consumer. |
 | **uart_tcp_server** | TCP server which *is* a `UARTComponent`<br>connected clients' data is available through the standard UART interface. |
-| **uart_bridge** | Bidirectional byte forwarder between any two `UARTComponents`. |
+| **uart_bridge** | N-way byte forwarder between any `UARTComponent` instances.<br>Can itself be used as a `uart_id` for multi-tap topologies. |
 | **uart_common** | Internal SPSC ring buffer (no user-facing config). |
 
 All three configurable components support multiple instances using standard ESPHome list syntax (`-` prefix with unique `id`s).
 
 ```mermaid
 graph TD
-    bridge["uart_bridge<br/>(A ◄──► B)"]
+    bridge["uart_bridge<br/>(N UARTs)"]
     bridge --- gpio["uart<br/>(GPIO)"]
     bridge --- tcp_client["uart_tcp_client<br/>(connect)"]
     bridge --- tcp_server["uart_tcp_server<br/>(listen)"]
+    bridge --- bridge2["another uart_bridge"]
 
     tcp_client --- common["uart_common<br/>SPSCRingBuffer"]
     tcp_server --- common
@@ -49,9 +50,10 @@ uart_tcp_client:
   port: 5000
   rx_buffer_size: 4096       # ring buffer size (default 4096)
   reconnect_interval: 5s     # auto-reconnect on disconnect (default 5s)
+  stall_timeout: 15s         # force reconnect after silence (default 15s, 0 to disable)
 ```
 
-Includes stall detection: if no bytes arrive for 15 seconds, it forces a reconnect.
+Includes stall detection: if no bytes arrive for `stall_timeout`, it forces a reconnect.
 
 ### `uart_tcp_server`
 
@@ -73,35 +75,44 @@ uart_tcp_server:
 
 ### `uart_bridge`
 
-Bidirectional byte forwarder between two UART references. Works with any combination of hardware UART, TCP client, TCP server, USB CDC ACM.
+N-way byte forwarder between UART references. Works with any combination of hardware UART, TCP client, TCP server, USB CDC ACM, or other bridges. The bridge itself is a `UARTComponent` — consumers can optionally use it as a `uart_id` for multi-tap topologies.
 
 ```yaml
-uart:
-  - id: rs485_bus
-    tx_pin: GPIO17
-    rx_pin: GPIO18
-    baud_rate: 38400
-
-uart_tcp_server:
-  id: tcp_bus
-  port: 5000
-
 uart_bridge:
-  uart_a: rs485_bus
-  uart_b: tcp_bus
+  uarts: [rs485_bus, tcp_bus]
   buffer_size: 512           # internal copy buffer (default 512)
-  direction: bidirectional    # bidirectional | a_to_b | b_to_a
 ```
+
+Each UART in the list can have a `flow` setting:
+
+```yaml
+uart_bridge:
+  id: hub_uart
+  uarts:
+    - hw_uart                # flow: both (default)
+    - uart: debug_tap
+      flow: from_bridge      # read-only tap — sees traffic, can't inject
+```
+
+**Flow options:**
+
+| flow | Bridge reads from it | Bridge writes to it | Use for |
+|---|---|---|---|
+| `both` (default) | yes | yes | Full participant — hardware UART, bidirectional link |
+| `from_bridge` | no | yes | Read-only tap — debug viewer, passive monitor |
+| `to_bridge` | yes | no | Inject-only source — feeds data in without receiving |
+
+`id` is optional. Only needed when a UART consumer needs to read or write through the bridge itself.
 
 **Supported topologies:**
 
-| A | B | Use Case |
-|---|---|---|
-| hardware UART | hardware UART | RS485 ↔ RS232 protocol converter |
-| hardware UART | tcp_server | Serial-to-network bridge (raw bytes, fixed baud rate) |
-| tcp_client | hardware UART | Remote serial port consumer |
-| tcp_client | tcp_server | Network serial proxy/repeater |
-| tcp_server | tcp_server | Multi-party bus tap |
+| UARTs | Use Case |
+|---|---|
+| hardware UART + hardware UART | RS485 ↔ RS232 protocol converter |
+| hardware UART + tcp_server | Serial-to-network bridge |
+| tcp_client + hardware UART | Remote serial port consumer |
+| tcp_client + tcp_server | Network serial proxy/repeater |
+| hardware UART + tcp_server (`from_bridge`) + consumer via bridge `id` | Multi-tap — consumer + debug viewer |
 
 ## Common Examples
 
@@ -144,8 +155,7 @@ uart_tcp_server:
   client_mode: exclusive
 
 uart_bridge:
-  uart_a: device_uart
-  uart_b: tcp_link
+  uarts: [device_uart, tcp_link]
 ```
 
 **ESP B** — connects to ESP A, presents the remote UART to any consumer:
@@ -227,8 +237,7 @@ uart_tcp_server:
   client_mode: exclusive
 
 uart_bridge:
-  uart_a: serial_port
-  uart_b: network_port
+  uarts: [serial_port, network_port]
 ```
 
 Then from any machine on the network: `nc esp-device.local 5000`
@@ -254,8 +263,7 @@ uart:
     baud_rate: 9600
 
 uart_bridge:
-  uart_a: rs485_bus
-  uart_b: rs232_bus
+  uarts: [rs485_bus, rs232_bus]
 ```
 
 ### Use a TCP server as a virtual UART (no hardware serial, no bridge)
@@ -297,44 +305,21 @@ This pattern scales to any UART consumer component that accepts a `uart_id`.
 See [InfinitESP](https://github.com/nebulous/infinitesp) for a production example:
 a custom `sam_ascii` component uses `uart_tcp_server` directly as its UART to expose an HVAC CLI over the network.
 
-## Multi-Tap / Weird Topologies / Bad Ideas
-
-Because `uart_tcp_client` and `uart_tcp_server` are both full `UARTComponent` instances,
-they can be composed in ways that go beyond simple point-to-point bridging.
-Some of these are genuinely useful. Some are just interesting.
-
-### Loopback multi-tap (SPMC via self-connection)
+### Multi-tap — debug viewer alongside a UART consumer
 
 ESPHome's UART is poll-based. Once bytes are read, they're gone.
 You can't have two components reading from the same hardware UART.
-But you *can* bridge the hardware UART to a `uart_tcp_server` in fanout mode,
-then have a `uart_tcp_client` on the same ESP connect back to that server.
-The tcp_server fans bytes out to all clients, one of which is the local tcp_client.
-The actual UART consumer reads from the tcp_client.
-
-This gives you a live tap alongside a working UART consumer,
-useful for debugging serial protocols in real time without disrupting the component
-that's parsing them.
-
-The tap is not strictly read-only.
-Bytes typed into `nc` flow through the server to the bridge and out the hardware UART,
-so you can send commands to the serial device from the debug viewer.
-But this gets confusing quickly: the `uart_tcp_client` consumer and the `nc` client
-are both writing to the same UART through the same server,
-and there is no echo, so the `nc` session won't show its own typed bytes.
-If the UART consumer is also sending commands,
-both sides will be talking to the device simultaneously with no coordination.
-You may want to treat the tap as read-only unless you enjoy this level of chaos.
+`uart_bridge` solves this: it reads from the hardware UART, buffers the bytes internally,
+and fans them out to any number of additional UARTs. A UART consumer reads from the bridge itself.
 
 ```mermaid
 flowchart TD
     radar["LD2450 radar"] -->|"hardware serial"| uartbus["uart_bus\n(GPIO)"]
-    uartbus -->|"uart_bridge"| tap["uart_tcp_server\n:5000 fanout"]
-    consumer["uart_tcp_client\n127.0.0.1:5000"] -->|"TCP connect"| tap
-    tap -.->|"fanout"| consumer
-    nc["nc esp.local 5000\ndebug viewer"] -->|"TCP connect"| tap
+    uartbus -->|"fan-in"| bridge["uart_bridge\n(hub_uart)"]
+    bridge -->|"consumer reads"| ld2450["ld2450 component"]
+    bridge -->|"fan-out"| tap["uart_tcp_server\n:5000"]
+    nc["nc esp.local 5000\n(debug viewer)"] -->|"TCP connect"| tap
     tap -.->|"fanout"| nc
-    consumer -->|"uart_id"| ld2450["ld2450 component"]
 ```
 
 ```yaml
@@ -355,58 +340,61 @@ uart_tcp_server:
   client_mode: fanout
   max_clients: 4
 
-uart_tcp_client:
-  id: radar_consumer
-  host: 127.0.0.1
-  port: 5000
-  reconnect_interval: 2s
-
 uart_bridge:
-  uart_a: uart_bus
-  uart_b: radar_tap
+  id: hub_uart
+  uarts:
+    - uart_bus
+    - uart: radar_tap
+      flow: from_bridge      # nc sees traffic, can't inject bytes into the radar
 
 ld2450:
   id: ld2450_radar
-  uart_id: radar_consumer   # reads via the loopback TCP client
+  uart_id: hub_uart           # reads from the bridge
   throttle: 100ms
 ```
 
 Then `nc esp.local 5000` gives you a live raw byte stream
 while the ld2450 component works normally.
 
-**Why this works:**
-`uart_tcp_server` in fanout mode is inherently SPMC (single producer, multiple consumers).
-The hardware UART produces once, the server fans out to N consumers.
-One consumer happens to be a local `uart_tcp_client`.
+**How it works:**
+The bridge reads from `uart_bus` and fans bytes out to both its internal ring buffer
+(for the `ld2450` consumer) and to `radar_tap` (for nc).
+The `flow: from_bridge` setting means `radar_tap` only receives — nc can't inject
+bytes back into the bridge and through to the radar.
 
-**Caveats:**
+**Without `flow: from_bridge`:**
+nc could type bytes that flow through `radar_tap` into the bridge and out `uart_bus` to the radar.
+If the ld2450 component is also sending commands, both sides would be talking to the device
+simultaneously with no coordination.
+Using `from_bridge` prevents this.
 
-- The `uart_tcp_client` stall detector will force a reconnect after 15 seconds of silence.
-  If the serial device goes quiet for extended periods, you'll get reconnect storms.
-  Extend or disable the stall timeout for this use case.
+### Other topologies
 
-- Every byte travels through the bridge, into the TCP server, across lwIP loopback,
-  into the TCP client, through its ring buffer, and finally to the component.
-  There's a latency and memory cost.
-  This is fine at lower speeds and becomes less so at higher speeds.
-
-- No flow control. If the consumer is slow, its ring buffer fills and bytes are lost.
-  Same as any UART overflow, but now there are two ring buffers in the path.
-
-### Other questionable ideas
-
-- **uart_bridge between two tcp_servers:**
-  Multi-party bus tap with no hardware UART at all.
-  Two different ESPs each run a tcp_server, one runs a bridge,
-  and external clients connect to both.
-  Useful if you want to snoop on a conversation between two TCP serial devices.
+- **Multi-party TCP bridge:**
+  ```yaml
+  uart_bridge:
+    uarts: [tcp_server_a, tcp_server_b]
+  ```
+  Bridge two TCP servers with no hardware UART. External clients connect to both.
 
 - **Chained bridges:**
   Bridge hardware UART → tcp_client → (network) → tcp_server → bridge → hardware UART.
   Serial over two network hops. It works, but adds latency at each hop
   and you should probably just run a longer cable.
 
-- **Two ESPs bridged as a wireless serial cable:** see the "Virtual serial cable over WiFi" example above.
+- **Multiple independent bridges:**
+  ```yaml
+  uart_bridge:
+    uarts: [rs485_bus, tcp_server_1]
+
+  uart_bridge:
+    id: debug_hub
+    uarts:
+      - rs232_bus
+      - uart: tcp_server_2
+        flow: from_bridge
+  ```
+  Each bridge is independent. Multiple bridges on one ESP is supported.
 
 ## Design Notes
 
@@ -416,6 +404,8 @@ One consumer happens to be a local `uart_tcp_client`.
 a TCP thread (ESP32) or the main loop (ESP8266).
 The SPSC ring buffer in `uart_common` handles the producer/consumer split:
 TCP callback writes, main loop reads. No mutex needed.
+
+`uart_bridge` operates entirely in `loop()` — single-threaded, no concurrency concerns.
 
 ### Backpressure
 
@@ -453,5 +443,21 @@ At 115200 baud (~11.5 bytes/ms) and below, loop timing shouldn't be the bottlene
 on ESP32 or ESP8266. The UART FIFO and driver-level buffering handle it comfortably.
 At higher rates (460800+), the gap between `loop()` invocations can exceed
 the hardware FIFO depth, and you may need to shrink the loop interval or increase `buffer_size`.
+
+### Migration from uart_a / uart_b syntax
+
+The `uart_a` / `uart_b` syntax still works but is deprecated:
+
+```yaml
+# Deprecated (still accepted, will produce a warning)
+uart_bridge:
+  uart_a: rs485_bus
+  uart_b: rs232_bus
+  direction: bidirectional
+
+# Current syntax — equivalent
+uart_bridge:
+  uarts: [rs485_bus, rs232_bus]
+```
 
 ### License: MIT

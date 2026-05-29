@@ -42,22 +42,32 @@ void UARTTCPClientComponent::setup() {
       },
       this);
 
-  connect_();
+  // Don't connect from setup() — defer to loop() so the system is fully
+  // initialized. Use a sentinel value of 0 and check for it in loop().
+  last_connect_attempt_ = 0;
 }
 
 void UARTTCPClientComponent::connect_() {
-  // Abort any in-progress attempt before starting a new one.
-  // Without this, a stale DNS callback on the async task can race with
-  // a new connect() call from the main loop, corrupting lwIP's
-  // tcp_core_guard mutex (assertion failure in sys_mutex_unlock).
   if (connecting_) {
+    // A previous attempt is still in-flight. close() will trigger the
+    // onDisconnect callback which resets connecting_ and the next loop()
+    // will retry.
     tcp_client_.close();
-    connecting_ = false;
+    return;
   }
   ESP_LOGI(TAG, "Connecting to %s:%u ...", host_.c_str(), port_);
   connecting_ = true;
-  tcp_client_.connect(host_.c_str(), port_);
   last_connect_attempt_ = millis();
+
+  // If the host is a dotted-decimal IP, resolve it synchronously and
+  // call connect(ip, port) directly to avoid a DNS callback that may
+  // never fire (observed with AsyncTCP's dns_found on ESP32-S3).
+  ip_addr_t addr;
+  if (ipaddr_aton(host_.c_str(), &addr)) {
+    tcp_client_.connect(addr, port_);
+  } else {
+    tcp_client_.connect(host_.c_str(), port_);
+  }
 }
 
 void UARTTCPClientComponent::disconnect_() {
@@ -67,7 +77,7 @@ void UARTTCPClientComponent::disconnect_() {
 }
 
 void UARTTCPClientComponent::loop() {
-#if !defined(USE_ESP32) && !defined(USE_ESP8266) && !defined(USE_RP2040) && !defined(USE_LIBRETINY)
+#if !defined(USE_ESP32) && !defined(USE_ESP8266) && !defined(USE_ESP2040) && !defined(USE_LIBRETINY)
   tcp_client_.loop();
 #endif
 
@@ -83,9 +93,21 @@ void UARTTCPClientComponent::loop() {
     }
   }
 
-  // Auto-reconnect (only if not already connecting)
-  if (!connected_ && !connecting_ && (millis() - last_connect_attempt_ > reconnect_interval_ms_)) {
+  // Auto-reconnect
+  if (!connected_ && !connecting_ &&
+      (last_connect_attempt_ == 0 || millis() - last_connect_attempt_ > reconnect_interval_ms_)) {
     connect_();
+  }
+
+  // Safety net: if connecting_ has been stuck true for too long without
+  // any callback, force-close and retry. Handles cases where DNS resolution
+  // or the async TCP task silently drops the connect attempt.
+  if (connecting_ && last_connect_attempt_ > 0 &&
+      millis() - last_connect_attempt_ > reconnect_interval_ms_ * 2) {
+    ESP_LOGW(TAG, "Connect attempt stuck for %lums, forcing close",
+             (unsigned long)(millis() - last_connect_attempt_));
+    tcp_client_.close();
+    connecting_ = false;
   }
 }
 
