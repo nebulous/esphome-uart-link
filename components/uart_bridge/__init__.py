@@ -35,7 +35,7 @@ OLD_DIRECTIONS = {
     "b_to_a": Direction.DIRECTION_B_TO_A,
 }
 
-# Per-UART entry: bare string (use_id) or dict with uart + optional flow
+# Per-UART entry: bare use_id (an esphome ID object) or dict with uart + optional flow
 UART_ENTRY = cv.Any(
     cv.use_id(uart.UARTComponent),
     cv.Schema({
@@ -45,18 +45,31 @@ UART_ENTRY = cv.Any(
 )
 
 
+def _uart_member(entry):
+    """Split a uarts[] entry into (uart_id, flow).
+
+    A bare entry is an esphome ID object produced by cv.use_id() (flow defaults
+    to FLOW_BOTH); a dict entry carries an explicit 'flow'.
+    """
+    if isinstance(entry, dict):
+        return entry[CONF_UART], entry[CONF_FLOW]
+    return entry, Flow.FLOW_BOTH
+
+
 def _validate_no_duplicates(config):
     """Ensure no UART appears twice in the members list."""
     if CONF_UARTS in config:
         seen = []
         for entry in config[CONF_UARTS]:
-            uart_id = entry if isinstance(entry, str) else entry[CONF_UART]
-            if uart_id in seen:
+            uart_id, _ = _uart_member(entry)
+            # cv.use_id() yields an esphome ID object whose .id is the name
+            key = getattr(uart_id, "id", uart_id)
+            if key in seen:
                 raise cv.Invalid(
-                    f"UART '{uart_id}' appears more than once in the bridge. "
+                    f"UART '{key}' appears more than once in the bridge. "
                     f"Each UART can only be a member of a bridge once."
                 )
-            seen.append(uart_id)
+            seen.append(key)
     elif "__legacy_uart_a" in config:
         if config["__legacy_uart_a"] == config["__legacy_uart_b"]:
             raise cv.Invalid(
@@ -141,17 +154,9 @@ async def to_code(config):
         cg.add(var.set_uart_b(uart_b))
     else:
         # New uarts: list API
-        members = []
         for entry in config[CONF_UARTS]:
-            if isinstance(entry, str):
-                uart_var = await cg.get_variable(entry)
-                members.append((uart_var, Flow.FLOW_BOTH))
-            else:
-                uart_var = await cg.get_variable(entry[CONF_UART])
-                members.append((uart_var, entry[CONF_FLOW]))
-
-        # Build member structs in C++
-        for uart_var, flow in members:
+            member_id, flow = _uart_member(entry)
+            uart_var = await cg.get_variable(member_id)
             cg.add(var.add_member(uart_var, flow))
 
     await cg.register_component(var, config)
