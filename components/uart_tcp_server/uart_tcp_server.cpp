@@ -1,5 +1,6 @@
 #include "uart_tcp_server.h"
 #include "esphome/core/log.h"
+#include <algorithm>
 
 namespace esphome::uart_tcp_server {
 
@@ -65,12 +66,15 @@ ClientState *UARTTCPServerComponent::accept_client_(AsyncClient *client) {
     }
     slot = new ClientState();
     slot->ring.init(rx_buffer_size_);
+    if (tx_buffer_size_ > 0)
+      slot->tx_ring.init(tx_buffer_size_);
     clients_.push_back(slot);
   }
 
   slot->client = client;
   slot->connected = true;
   slot->ring.clear();
+  slot->tx_ring.clear();
   slot->last_rx_byte_time = millis();
   slot->server = this;
   total_clients_accepted_++;
@@ -128,8 +132,57 @@ void UARTTCPServerComponent::merge_rx_() {
   }
 }
 
+void UARTTCPServerComponent::drain_tx_() {
+  uint8_t tmp[512];
+  for (auto *cs : clients_) {
+    if (!cs->connected)
+      continue;
+    // Push queued bytes into the TCP send buffer as space opens. Bounded by
+    // space() per pass; ACKs free more across later loops, so no spinning.
+    while (cs->tx_ring.available() > 0) {
+      size_t sp = cs->client->space();
+      if (sp == 0)
+        break;
+      size_t n = std::min({cs->tx_ring.available(), sp, sizeof(tmp)});
+      n = cs->tx_ring.read(tmp, n);  // consumes from the ring
+      if (n == 0)
+        break;
+      // COPY flag: tmp is stack-local, so LWIP must duplicate it. ESP8266's
+      // default is a no-copy reference, unsafe for a stack buffer.
+      size_t written = cs->client->write((const char *) tmp, n, ASYNC_WRITE_FLAG_COPY);
+      if (written < n) {
+        // space() promised room but write() took less: the client is closing.
+        // Bytes already consumed from the ring are lost; stop draining it.
+        total_tx_dropped_ += (n - written);
+        ESP_LOGW(TAG, "'%s' client %s: short write, dropped %u bytes",
+                 name_.empty() ? "(no id)" : name_.c_str(),
+                 remote_addr_(cs->client).c_str(), (unsigned) (n - written));
+        break;
+      }
+    }
+  }
+}
+
+void UARTTCPServerComponent::enqueue_tx_(ClientState *cs, const uint8_t *data, size_t len) {
+  // One sentinel slot is reserved, so usable free space is capacity - 1.
+  size_t free_space = (cs->tx_ring.capacity() - 1) - cs->tx_ring.available();
+  if (len <= free_space) {
+    cs->tx_ring.write(data, len);
+    return;
+  }
+  // Buffer full: the client is slower than the stream. Accept what fits and
+  // drop the rest rather than block or evict queued (in-flight) bytes.
+  if (free_space > 0)
+    cs->tx_ring.write(data, free_space);
+  total_tx_dropped_ += (len - free_space);
+  ESP_LOGW(TAG, "'%s' client %s: TX buffer full, dropped %u bytes",
+           name_.empty() ? "(no id)" : name_.c_str(),
+           remote_addr_(cs->client).c_str(), (unsigned) (len - free_space));
+}
+
 void UARTTCPServerComponent::loop() {
   merge_rx_();
+  drain_tx_();
 
   // Idle timeout
   if (idle_timeout_ms_ > 0) {
@@ -149,8 +202,10 @@ void UARTTCPServerComponent::loop() {
 
   // Clean up disconnected client ring residuals
   for (auto *cs : clients_) {
-    if (!cs->connected)
+    if (!cs->connected) {
       cs->ring.clear();
+      cs->tx_ring.clear();
+    }
   }
 }
 
@@ -162,13 +217,18 @@ void UARTTCPServerComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  Client mode: %s", client_mode_ == CLIENT_MODE_FANOUT ? "fanout" : "exclusive");
   ESP_LOGCONFIG(TAG, "  RX buffer: %u bytes (ring capacity: %u)", (unsigned) rx_buffer_size_,
                 (unsigned) merged_ring_.capacity());
+  if (tx_buffer_size_ > 0)
+    ESP_LOGCONFIG(TAG, "  TX buffer: %u bytes/client", (unsigned) tx_buffer_size_);
+  else
+    ESP_LOGCONFIG(TAG, "  TX buffer: disabled (drops on short write)");
   ESP_LOGCONFIG(TAG, "  Idle timeout: %ums", idle_timeout_ms_);
   size_t active = 0;
   for (auto *cs : clients_)
     if (cs->connected) active++;
   ESP_LOGCONFIG(TAG, "  Active clients: %u", (unsigned) active);
-  ESP_LOGCONFIG(TAG, "  Lifetime: accepted=%u rejected=%u", (unsigned) total_clients_accepted_,
-                (unsigned) total_clients_rejected_);
+  ESP_LOGCONFIG(TAG, "  Lifetime: accepted=%u rejected=%u tx_dropped=%u",
+                (unsigned) total_clients_accepted_, (unsigned) total_clients_rejected_,
+                (unsigned) total_tx_dropped_);
 }
 
 // ---- UARTComponent overrides ----
@@ -178,17 +238,32 @@ void UARTTCPServerComponent::write_array(const uint8_t *data, size_t len) {
   for (auto *cs : clients_) {
     if (!cs->connected)
       continue;
-    size_t written = cs->client->write((const char *) data, len);
-    if (written < len) {
-      ESP_LOGW(TAG, "'%s' client %s: only wrote %u/%u bytes",
-               name_.empty() ? "(no id)" : name_.c_str(),
-               remote_addr_(cs->client).c_str(),
-               (unsigned) written, (unsigned) len);
+    size_t offset = 0;
+    // Write straight to the TCP send buffer when there is no backlog (or no
+    // TX buffer configured). COPY makes LWIP duplicate the data; ESP8266's
+    // default is a no-copy reference, unsafe for a transient caller buffer.
+    if (tx_buffer_size_ == 0 || cs->tx_ring.available() == 0) {
+      offset = cs->client->write((const char *) data, len, ASYNC_WRITE_FLAG_COPY);
+      if (offset > len)  // defensive clamp
+        offset = len;
+    }
+    if (offset < len) {
+      if (tx_buffer_size_ > 0) {
+        // Queue the remainder; drained from loop() as ACKs free send-buffer
+        // space, so this never blocks the main loop or stalls UART RX.
+        enqueue_tx_(cs, data + offset, len - offset);
+      } else {
+        // No TX buffering: drop what the send buffer would not take.
+        total_tx_dropped_ += (len - offset);
+        ESP_LOGW(TAG, "'%s' client %s: send buffer full, dropped %u/%u bytes",
+                 name_.empty() ? "(no id)" : name_.c_str(),
+                 remote_addr_(cs->client).c_str(), (unsigned) (len - offset), (unsigned) len);
+      }
     }
     sent_count++;
   }
   if (sent_count == 0 && len > 0) {
-    ESP_LOGD(TAG, "'%s' write_array: no connected clients, dropping %u bytes",
+    ESP_LOGV(TAG, "'%s' write_array: no connected clients, dropping %u bytes",
              name_.empty() ? "(no id)" : name_.c_str(), (unsigned) len);
   }
 }

@@ -1,7 +1,7 @@
 # esphome-uart-link
 
 ESPHome external components for UART interconnection. Bridges hardware serial ports to TCP networks and each other.
-Transport-agnostic: any UART consumer sees the standard `available()` / `read_array()` / `write_array()` interface no matter whether bytes come from GPIO pins, a TCP socket, or another UART.
+Transport-agnostic: any UART consumer sees the standard `available()` / `read_array()` / `write_array()` interface, whether bytes arrive from GPIO pins, a TCP socket, or another UART.
 
 ## Components
 
@@ -9,10 +9,10 @@ Transport-agnostic: any UART consumer sees the standard `available()` / `read_ar
 |---|---|
 | **uart_tcp_client** | Outbound TCP client which *is* a `UARTComponent`<br>use as a drop-in `uart_id` for any UART consumer. |
 | **uart_tcp_server** | TCP server which *is* a `UARTComponent`<br>connected clients' data is available through the standard UART interface. |
-| **uart_bridge** | N-way byte forwarder between any `UARTComponent` instances.<br>Can itself be used as a `uart_id` for multi-tap topologies. |
+| **uart_bridge** | N-way byte forwarder between `UARTComponent` instances.<br>Can itself be used as a `uart_id` for multi-tap topologies. |
 | **uart_common** | Internal SPSC ring buffer (no user-facing config). |
 
-All three configurable components support multiple instances using standard ESPHome list syntax (`-` prefix with unique `id`s).
+The three configurable components each support multiple instances using standard ESPHome list syntax (`-` prefix with unique `id`s).
 
 ```mermaid
 graph TD
@@ -41,7 +41,7 @@ external_components:
 
 ### `uart_tcp_client`
 
-Connects to a remote TCP server and **is** a `UARTComponent`, not a wrapper around one. Any UART consumer can use it as a drop-in `uart_id`; reads and writes go over the TCP connection.
+Connects to a remote TCP server and **is** a `UARTComponent`, not a wrapper around one. UART consumers use it as a drop-in `uart_id`; reads and writes go over the TCP connection.
 
 ```yaml
 uart_tcp_client:
@@ -57,17 +57,20 @@ Includes stall detection: if no bytes arrive for `stall_timeout`, it forces a re
 
 ### `uart_tcp_server`
 
-Listens on a TCP port and **is** a `UARTComponent`. A `UARTComponent` backed by TCP sockets. Anything reading from it sees bytes written by TCP clients; anything written to it gets sent to connected clients. Each client gets its own ring buffer; bytes from all clients are merged into a single read stream.
+Listens on a TCP port and **is** a `UARTComponent` backed by TCP sockets. Reads return bytes written by TCP clients; writes go to connected clients. Each client gets its own ring buffer, and bytes from all clients merge into a single read stream.
 
 ```yaml
 uart_tcp_server:
   id: tcp_serial
   port: 5000
   max_clients: 2             # simultaneous connections (default 2, max 16)
-  rx_buffer_size: 4096       # per-client ring buffer (default 4096)
+  rx_buffer_size: 4096       # per-client RX ring buffer (default 4096)
+  tx_buffer_size: 16384      # per-client TX queue (default 16384 on ESP32, 0 on ESP8266)
   client_mode: fanout        # fanout (default) or exclusive
   idle_timeout: 0ms          # kick idle clients (0 = disabled)
 ```
+
+**TX buffering:** writes go to the TCP send buffer first. When it fills, a per-client queue of `tx_buffer_size` bytes holds the overflow until ACKs free space, so `write_array` never blocks. Defaults: 16384 on ESP32, 0 on ESP8266. Set 0 to disable buffering; a short write then drops the remainder. Size it to the largest expected burst minus the send window (about 5.7 KB on ESP32, 2.9 KB on ESP8266).
 
 **Client modes:**
 - `fanout`: all connected clients see the same TX stream. Good for multi-monitor/tap scenarios.
@@ -75,7 +78,7 @@ uart_tcp_server:
 
 ### `uart_bridge`
 
-N-way byte forwarder between UART references. Works with any combination of hardware UART, TCP client, TCP server, USB CDC ACM, or other bridges. The bridge itself is a `UARTComponent`. Consumers can use it as a `uart_id` for multi-tap topologies.
+N-way byte forwarder between UART references. Works with combinations of hardware UART, TCP client, TCP server, USB CDC ACM, or other bridges. The bridge itself is a `UARTComponent`. Consumers use it as a `uart_id` for multi-tap topologies.
 
 ```yaml
 uart_bridge:
@@ -98,7 +101,7 @@ uart_bridge:
 
 | flow | Bridge reads from it | Bridge writes to it | Use for |
 |---|---|---|---|
-| `both` (default) | yes | yes | Full participant (hardware UART, bidirectional link) |
+| `both` (default) | yes | yes | Bidirectional participant (hardware UART, two-way link) |
 | `from_bridge` | no | yes | Read-only tap (debug viewer, passive monitor) |
 | `to_bridge` | yes | no | Inject-only source (feeds data in, receives nothing) |
 
@@ -120,8 +123,8 @@ uart_bridge:
 
 Replace a serial cable with two ESPs talking over WiFi.
 ESP A sits next to the serial device and bridges its hardware UART to a TCP port.
-ESP B connects to A over WiFi and presents the remote UART to any ESPHome component.
-Any UART consumer on ESP B sees the device as if it were locally connected.
+ESP B connects to A over WiFi and presents the remote UART to ESPHome components.
+A UART consumer on ESP B sees the device as if it were locally connected.
 
 ```mermaid
 flowchart LR
@@ -176,17 +179,17 @@ modbus_controller:
   uart_id: remote_uart
 ```
 
-No serial cable, no socat, no ser2net. Just two ESPs and WiFi.
+Two ESPs and a WiFi link replace the serial cable, socat, or ser2net.
 Each ESP only needs power; the serial device can be anywhere on the network.
 
 **Common applications:**
 - RS485 Modbus devices in remote locations (solar inverters, smart meters, BMS)
 - Zigbee coordinator serial bridge (ZHA / Zigbee2MQTT over WiFi)
 - HVAC serial connections (Mitsubishi, Daikin) where running a cable is impractical
-- Any serial device you'd rather not sit next to
+- Serial devices in inconvenient locations
 
-**Caveat:** This is only as reliable as your WiFi.
-For critical or high-throughput links, consider a wired Ethernet ESP or a physical cable.
+**Caveat:** This is only as reliable as the WiFi link.
+For high-throughput or always-on links, consider a wired Ethernet ESP or a physical cable.
 
 ### Connect a UART component to a remote host, such as an ethernet serial bridge over TCP
 
@@ -199,7 +202,7 @@ flowchart BT
     R -.->|"bytes back"| C
 ```
 
-`uart_tcp_client` acts as a `UARTComponent`. Point any UART consumer at it:
+`uart_tcp_client` is a `UARTComponent`; UART consumers reference it via `uart_id`:
 
 ```yaml
 uart_tcp_client:
@@ -307,18 +310,17 @@ a custom `sam_ascii` component uses `uart_tcp_server` directly as its UART to ex
 
 ### Multi-tap: debug viewer alongside a UART consumer
 
-ESPHome's UART is poll-based. Once bytes are read, they're gone.
-ESPHome's UART API consumes bytes on read. Only one component can read from a given hardware UART.
+ESPHome's UART API consumes bytes on read, so only one component can read from a given hardware UART.
 `uart_bridge` solves this: it reads from the hardware UART, buffers the bytes internally,
-and fans them out to any number of additional UARTs. A UART consumer reads from the bridge itself.
+and fans them out to additional UARTs. A UART consumer reads from the bridge itself.
 
 ```mermaid
 flowchart TD
-    radar["LD2450 radar"] -->|"hardware serial"| uartbus["uart_bus\n(GPIO)"]
-    uartbus -->|"fan-in"| bridge["uart_bridge\n(hub_uart)"]
+    radar["LD2450 radar"] -->|"hardware serial"| uartbus["uart_bus<br/>(GPIO)"]
+    uartbus -->|"fan-in"| bridge["uart_bridge<br/>(hub_uart)"]
     bridge -->|"consumer reads"| ld2450["ld2450 component"]
-    bridge -->|"fan-out"| tap["uart_tcp_server\n:5000"]
-    nc["nc esp.local 5000\n(debug viewer)"] -->|"TCP connect"| tap
+    bridge -->|"fan-out"| tap["uart_tcp_server<br/>:5000"]
+    nc["nc esp.local 5000<br/>(debug viewer)"] -->|"TCP connect"| tap
     tap -.->|"fanout"| nc
 ```
 
@@ -361,7 +363,7 @@ ld2450:
   throttle: 100ms
 ```
 
-Then `nc esp.local 5000` gives you a live raw byte stream
+Then `nc esp.local 5000` shows a live raw byte stream
 while the ld2450 component works normally.
 
 **How it works:**
@@ -387,8 +389,7 @@ Using `from_bridge` prevents this.
 
 - **Chained bridges:**
   Bridge hardware UART → tcp_client → (network) → tcp_server → bridge → hardware UART.
-  Serial over two network hops. It works, but adds latency at each hop
-  and you should probably just run a longer cable.
+  Serial over two network hops. Each hop adds latency; a single longer cable avoids the extra hops.
 
 - **Multiple independent bridges:**
   ```yaml
@@ -417,9 +418,9 @@ TCP callback writes, main loop reads. No mutex needed.
 
 `uart_bridge` has no flow control.
 If a destination can't keep up, bytes buffer in its transport layer
-(DMA/FIFO for hardware UART, AsyncClient send buffer for TCP).
+(DMA/FIFO for hardware UART; AsyncClient send buffer plus the `tx_buffer_size` queue for `uart_tcp_server`).
 The bridge assumes both sides can keep up.
-For very high baud rates, increase `buffer_size`.
+For high baud rates, increase `buffer_size`.
 
 ### Raw byte stream: no flow control or RFC 2217
 
@@ -445,10 +446,10 @@ For those, use a USB connection or a full RFC 2217 bridge like ser2net.
 ESPHome's UART API is purely poll-based (`available()` / `read_array()`).
 There are no RX callbacks.
 The bridge must live in `loop()`, which fires every few ms.
-At 115200 baud (~11.5 bytes/ms) and below, loop timing shouldn't be the bottleneck
-on ESP32 or ESP8266. The UART FIFO and driver-level buffering handle it comfortably.
+At 115200 baud (~11.5 bytes/ms) and below, loop timing is not the bottleneck
+on ESP32 or ESP8266. The UART FIFO and driver-level buffering absorb it.
 At higher rates (460800+), the gap between `loop()` invocations can exceed
-the hardware FIFO depth, and you may need to shrink the loop interval or increase `buffer_size`.
+the hardware FIFO depth; increase `buffer_size` or shorten the loop interval.
 
 ### Migration from uart_a / uart_b syntax
 

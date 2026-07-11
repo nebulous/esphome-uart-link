@@ -11,6 +11,7 @@ CONF_RX_BUFFER_SIZE = "rx_buffer_size"
 CONF_MAX_CLIENTS = "max_clients"
 CONF_CLIENT_MODE = "client_mode"
 CONF_IDLE_TIMEOUT = "idle_timeout"
+CONF_TX_BUFFER_SIZE = "tx_buffer_size"
 
 uart_tcp_server_ns = cg.esphome_ns.namespace("uart_tcp_server")
 UARTTCPServerComponent = uart_tcp_server_ns.class_(
@@ -30,6 +31,7 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_PORT): cv.uint16_t,
     cv.Optional(CONF_MAX_CLIENTS, default=2): cv.All(cv.uint8_t, cv.Range(min=1, max=16)),
     cv.Optional(CONF_RX_BUFFER_SIZE, default=4096): cv.All(cv.validate_bytes, cv.uint16_t),
+    cv.Optional(CONF_TX_BUFFER_SIZE): cv.All(cv.validate_bytes, cv.uint16_t),
     cv.Optional(CONF_CLIENT_MODE, default="fanout"): cv.enum(CLIENT_MODES, lower=True),
     cv.Optional(CONF_IDLE_TIMEOUT, default="0ms"): cv.All(cv.time_period, cv.time_period_in_milliseconds_),
 }).extend(cv.COMPONENT_SCHEMA)
@@ -40,6 +42,8 @@ async def to_code(config):
     cg.add(var.set_port(config[CONF_PORT]))
     cg.add(var.set_max_clients(config[CONF_MAX_CLIENTS]))
     cg.add(var.set_rx_buffer_size(config[CONF_RX_BUFFER_SIZE]))
+    if CONF_TX_BUFFER_SIZE in config:
+        cg.add(var.set_tx_buffer_size(config[CONF_TX_BUFFER_SIZE]))
     cg.add(var.set_client_mode(config[CONF_CLIENT_MODE]))
     cg.add(var.set_idle_timeout(config[CONF_IDLE_TIMEOUT]))
     cg.add(var.set_name(str(config[CONF_ID])))
