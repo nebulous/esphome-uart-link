@@ -11,8 +11,8 @@ std::string UARTTCPServerComponent::remote_addr_(AsyncClient *client) {
   snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u", ip[0], ip[1], ip[2], ip[3], client->remotePort());
 #else
   uint32_t addr = client->getRemoteAddress();
-  snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u", addr & 0xFF, (addr >> 8) & 0xFF, (addr >> 16) & 0xFF,
-           (addr >> 24) & 0xFF, client->remotePort());
+  snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u", (unsigned)(addr & 0xFF), (unsigned)((addr >> 8) & 0xFF),
+           (unsigned)((addr >> 16) & 0xFF), (unsigned)((addr >> 24) & 0xFF), client->remotePort());
 #endif
   return buf;
 }
@@ -192,7 +192,7 @@ void UARTTCPServerComponent::loop() {
         if (idle > idle_timeout_ms_) {
           ESP_LOGI(TAG, "'%s' client %s idle for %ums, disconnecting",
                    name_.empty() ? "(no id)" : name_.c_str(),
-                   remote_addr_(cs->client).c_str(), idle);
+                   remote_addr_(cs->client).c_str(), (unsigned) idle);
           cs->client->close();
           cs->connected = false;
         }
@@ -221,7 +221,7 @@ void UARTTCPServerComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "  TX buffer: %u bytes/client", (unsigned) tx_buffer_size_);
   else
     ESP_LOGCONFIG(TAG, "  TX buffer: disabled (drops on short write)");
-  ESP_LOGCONFIG(TAG, "  Idle timeout: %ums", idle_timeout_ms_);
+  ESP_LOGCONFIG(TAG, "  Idle timeout: %ums", (unsigned) idle_timeout_ms_);
   size_t active = 0;
   for (auto *cs : clients_)
     if (cs->connected) active++;

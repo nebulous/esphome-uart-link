@@ -50,6 +50,11 @@ class UARTTCPServerComponent : public uart::UARTComponent, public Component {
   bool read_array(uint8_t *data, size_t len) override;
   size_t available() override;
   uart::UARTFlushResult flush() override;
+#if defined(USE_ESP8266) || defined(USE_ESP32)
+  // load_settings(bool) became pure-virtual in UARTComponent on ESPHome
+  // 2026.7.0. This is a virtual/network UART with no hardware settings to load.
+  void load_settings(bool dump_config) override {}
+#endif
 
  protected:
   void check_logger_conflict() override {}
