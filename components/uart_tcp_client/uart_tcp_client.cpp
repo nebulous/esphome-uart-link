@@ -92,7 +92,7 @@ void UARTTCPClientComponent::loop() {
     uint32_t since_last_rx = millis() - last_rx_byte_time_;
     if (since_last_rx > stall_timeout_ms_) {
       ESP_LOGW(TAG, "'%s' no data for %ums (stall), forcing reconnect",
-               name_.empty() ? "(no id)" : name_.c_str(), since_last_rx);
+               name_.empty() ? "(no id)" : name_.c_str(), (unsigned) since_last_rx);
       disconnect_();
       ring_.clear();
       has_peek_ = false;
