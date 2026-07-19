@@ -122,7 +122,7 @@ def _migrate_old_syntax(config):
 # --- New syntax ---
 
 NEW_SYNTAX_SCHEMA = cv.Schema({
-    cv.Optional(CONF_ID): cv.declare_id(UARTBridge),
+    cv.GenerateID(): cv.declare_id(UARTBridge),
     cv.Required(CONF_UARTS): cv.All(cv.ensure_list(cv.Any(UART_ENTRY)), cv.Length(min=2)),
     cv.Optional(CONF_BUFFER_SIZE, default=512): cv.All(
         cv.validate_bytes, cv.Range(min=64, max=8192)
