@@ -5,3 +5,7 @@
 /secrets.yaml
 __pycache__/
 *.pyc
+
+# Local workflow state and agent tooling files; not part of the component.
+/private/
+/AGENTS.md
