@@ -1,5 +1,6 @@
 #include "uart_bridge.h"
 #include "esphome/core/log.h"
+#include "../uart_common/version.h"
 
 namespace esphome::uart_bridge {
 
@@ -86,8 +87,10 @@ void UARTBridge::loop() {
 }
 
 void UARTBridge::dump_config() {
+  const char *id = name_.empty() ? "(no id)" : name_.c_str();
+  ESP_LOGCONFIG(TAG, "UART Bridge '%s':", id);
+  ESP_LOGCONFIG(TAG, "  Version: uart-link %s", UART_LINK_VERSION);
   if (total_bytes_forwarded_ > 0) {
-    const char *id = name_.empty() ? "(no id)" : name_.c_str();
     ESP_LOGD(TAG, "Bridge '%s': %u bytes forwarded", id, (unsigned) total_bytes_forwarded_);
   }
 }

@@ -1,5 +1,6 @@
 #include "uart_tcp_server.h"
 #include "esphome/core/log.h"
+#include "../uart_common/version.h"
 #include <algorithm>
 
 namespace esphome::uart_tcp_server {
@@ -75,7 +76,7 @@ ClientState *UARTTCPServerComponent::accept_client_(AsyncClient *client) {
   slot->connected = true;
   slot->ring.clear();
   slot->tx_ring.clear();
-  slot->last_rx_byte_time = millis();
+  slot->last_activity_time = millis();
   slot->server = this;
   total_clients_accepted_++;
 
@@ -92,7 +93,7 @@ ClientState *UARTTCPServerComponent::accept_client_(AsyncClient *client) {
       [](void *arg, AsyncClient *c, void *data, size_t len) {
         auto *cs = static_cast<ClientState *>(arg);
         cs->ring.write(static_cast<uint8_t *>(data), len);
-        cs->last_rx_byte_time = millis();
+        cs->last_activity_time = millis();
       },
       slot);
 
@@ -159,6 +160,10 @@ void UARTTCPServerComponent::drain_tx_() {
                  remote_addr_(cs->client).c_str(), (unsigned) (n - written));
         break;
       }
+      // Bytes reached the send buffer: traffic toward the client, resets
+      // its idle timer. A client that stops ACKing never gets here, its
+      // window stays full, and the idle check reaps it.
+      cs->last_activity_time = millis();
     }
   }
 }
@@ -184,11 +189,15 @@ void UARTTCPServerComponent::loop() {
   merge_rx_();
   drain_tx_();
 
-  // Idle timeout
+  // Idle timeout: no traffic in either direction for this long disconnects
+  // the client. RX updates the timestamp from the TCP callback; TX updates
+  // it when bytes reach the send buffer (write_array direct path, drain_tx_
+  // backlog path). Queued-but-undelivered bytes do not reset the timer, so a
+  // client with a stuck-full window is reaped rather than kept alive.
   if (idle_timeout_ms_ > 0) {
     for (auto *cs : clients_) {
-      if (cs->connected && cs->last_rx_byte_time > 0) {
-        uint32_t idle = millis() - cs->last_rx_byte_time;
+      if (cs->connected && cs->last_activity_time > 0) {
+        uint32_t idle = millis() - cs->last_activity_time;
         if (idle > idle_timeout_ms_) {
           ESP_LOGI(TAG, "'%s' client %s idle for %ums, disconnecting",
                    name_.empty() ? "(no id)" : name_.c_str(),
@@ -212,6 +221,7 @@ void UARTTCPServerComponent::loop() {
 void UARTTCPServerComponent::dump_config() {
   const char *id = name_.empty() ? "(no id)" : name_.c_str();
   ESP_LOGCONFIG(TAG, "UART TCP Server '%s':", id);
+  ESP_LOGCONFIG(TAG, "  Version: uart-link %s", UART_LINK_VERSION);
   ESP_LOGCONFIG(TAG, "  Port: %u", port_);
   ESP_LOGCONFIG(TAG, "  Max clients: %u", (unsigned) max_clients_);
   ESP_LOGCONFIG(TAG, "  Client mode: %s", client_mode_ == CLIENT_MODE_FANOUT ? "fanout" : "exclusive");
@@ -221,7 +231,10 @@ void UARTTCPServerComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "  TX buffer: %u bytes/client", (unsigned) tx_buffer_size_);
   else
     ESP_LOGCONFIG(TAG, "  TX buffer: disabled (drops on short write)");
-  ESP_LOGCONFIG(TAG, "  Idle timeout: %ums", (unsigned) idle_timeout_ms_);
+  if (idle_timeout_ms_ > 0)
+    ESP_LOGCONFIG(TAG, "  Idle timeout: %ums (silence in either direction)", (unsigned) idle_timeout_ms_);
+  else
+    ESP_LOGCONFIG(TAG, "  Idle timeout: disabled");
   size_t active = 0;
   for (auto *cs : clients_)
     if (cs->connected) active++;
@@ -246,6 +259,8 @@ void UARTTCPServerComponent::write_array(const uint8_t *data, size_t len) {
       offset = cs->client->write((const char *) data, len, ASYNC_WRITE_FLAG_COPY);
       if (offset > len)  // defensive clamp
         offset = len;
+      if (offset > 0)
+        cs->last_activity_time = millis();
     }
     if (offset < len) {
       if (tx_buffer_size_ > 0) {

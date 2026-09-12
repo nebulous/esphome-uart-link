@@ -1,5 +1,6 @@
 #include "uart_tcp_client.h"
 #include "esphome/core/log.h"
+#include "../uart_common/version.h"
 
 namespace esphome::uart_tcp_client {
 
@@ -122,6 +123,7 @@ void UARTTCPClientComponent::loop() {
 void UARTTCPClientComponent::dump_config() {
   const char *id = name_.empty() ? "(no id)" : name_.c_str();
   ESP_LOGCONFIG(TAG, "UART TCP Client '%s':", id);
+  ESP_LOGCONFIG(TAG, "  Version: uart-link %s", UART_LINK_VERSION);
   ESP_LOGCONFIG(TAG, "  Host: %s:%u", host_.c_str(), port_);
   ESP_LOGCONFIG(TAG, "  RX Buffer: %u bytes (ring capacity: %u)", (unsigned) rx_buffer_size_,
                 (unsigned) ring_.capacity());

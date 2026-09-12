@@ -67,7 +67,7 @@ uart_tcp_server:
   rx_buffer_size: 4096       # per-client RX ring buffer (default 4096)
   tx_buffer_size: 16384      # per-client TX queue (default 16384 on ESP32, 0 on ESP8266)
   client_mode: fanout        # fanout (default) or exclusive
-  idle_timeout: 0ms          # kick idle clients (0 = disabled)
+  idle_timeout: 0ms          # disconnect after silence in either direction (0 = disabled)
 ```
 
 **TX buffering:** writes go to the TCP send buffer first. When it fills, a per-client queue of `tx_buffer_size` bytes holds the overflow until ACKs free space, so `write_array` never blocks. Defaults: 16384 on ESP32, 0 on ESP8266. Set 0 to disable buffering; a short write then drops the remainder. Size it to the largest expected burst minus the send window (about 5.7 KB on ESP32, 2.9 KB on ESP8266).
@@ -75,6 +75,8 @@ uart_tcp_server:
 **Client modes:**
 - `fanout`: all connected clients see the same TX stream. Good for multi-monitor/tap scenarios.
 - `exclusive`: only one client at a time. New connections disconnect the previous client. Better for command-response protocols.
+
+**Idle timeout:** `idle_timeout` disconnects a client after that much silence in either direction. Bytes sent by the client and bytes written to it both reset the timer, so a passive capture client (`nc host port > capture.bin`) stays connected while data flows. A client that stops ACKing receives no further bytes, goes idle, and is disconnected. `0` disables the check.
 
 ### `uart_bridge`
 
@@ -404,6 +406,15 @@ Using `from_bridge` prevents this.
   Each bridge is independent. Multiple bridges use standard ESPHome list syntax.
 
 ## Design Notes
+
+### Versioning
+
+CalVer: `YYYY.M.N` (e.g. `2026.9.0`), matching ESPHome core's scheme. `N` increments on each pushed change and resets when the month rolls over. The version lives in `components/uart_common/version.h` and is bumped as part of every commit/push. Each component reports it in `dump_config`, so a device running this library prints its uart-link version at boot:
+
+```
+[00:00:02][I][uart_tcp_server:055] UART TCP Server 'tcp_serial':
+[00:00:02][C][uart_tcp_server:056]   Version: uart-link 2026.9.0
+```
 
 ### Thread safety
 

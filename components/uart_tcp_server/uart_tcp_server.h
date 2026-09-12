@@ -24,7 +24,11 @@ struct ClientState {
   AsyncClient *client{nullptr};
   uart_common::SPSCRingBuffer ring;
   uart_common::SPSCRingBuffer tx_ring;
-  volatile uint32_t last_rx_byte_time{0};
+  // Last traffic in either direction. Written from the TCP thread (onData)
+  // and the main loop (successful sends). Aligned 32-bit store, so
+  // cross-thread updates cannot tear; worst case one reset lands a loop
+  // late. The idle check only reads it.
+  volatile uint32_t last_activity_time{0};
   bool connected{false};
   UARTTCPServerComponent *server{nullptr};
 };
