@@ -1,0 +1,40 @@
+esphome:
+  name: compile-esp8266
+
+esp8266:
+  board: esp01_1m
+
+wifi:
+  ssid: "testtesttest"
+  password: "testtesttest"
+
+api:
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../../components
+
+uart:
+  id: hw_uart
+  tx_pin: GPIO1
+  rx_pin: GPIO3
+  baud_rate: 9600
+
+uart_tcp_client:
+  - id: tcp_cl
+    host: 192.168.1.100
+    port: 5000
+
+uart_tcp_server:
+  - id: tcp_sv
+    port: 5001
+
+uart_bridge:
+  uarts:
+    - hw_uart
+    - uart: tcp_cl
+      flow: to_bridge
+    - uart: tcp_sv
+      flow: from_bridge

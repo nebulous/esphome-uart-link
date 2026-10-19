@@ -1,0 +1,24 @@
+esphome:
+  name: valid-minimal-client
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: "testtesttest"
+  password: "testtesttest"
+
+api:
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../../components
+
+uart_tcp_client:
+  - id: cl
+    host: 192.168.1.100
+    port: 5000

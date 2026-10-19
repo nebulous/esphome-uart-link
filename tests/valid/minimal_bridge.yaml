@@ -1,0 +1,32 @@
+esphome:
+  name: valid-minimal-bridge
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: "testtesttest"
+  password: "testtesttest"
+
+api:
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../../components
+
+uart:
+  - id: uart_a
+    tx_pin: GPIO17
+    rx_pin: GPIO18
+    baud_rate: 9600
+  - id: uart_b
+    tx_pin: GPIO21
+    rx_pin: GPIO22
+    baud_rate: 9600
+
+uart_bridge:
+  uarts: [uart_a, uart_b]

@@ -1,0 +1,1 @@
+Self-loop detected: uart_a and uart_b must reference different UART components.

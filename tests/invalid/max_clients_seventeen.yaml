@@ -1,0 +1,24 @@
+esphome:
+  name: invalid-max-clients-seventeen
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: "testtesttest"
+  password: "testtesttest"
+
+api:
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../../components
+
+uart_tcp_server:
+  - id: sv
+    port: 5000
+    max_clients: 17

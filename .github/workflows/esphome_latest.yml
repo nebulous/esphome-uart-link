@@ -1,0 +1,35 @@
+name: ESPHome latest
+
+# Weekly canary: compile the per-platform fixtures against the newest
+# released ESPHome so upstream API drift (the issue #4 class) surfaces
+# here before users hit it. Failures are expected to be transient until
+# fixed; this workflow does not gate pull requests.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  compile:
+    name: Compile ${{ matrix.fixture }} (latest esphome)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture: [esp32_arduino, esp32_idf, esp8266]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install latest ESPHome
+        run: pip install esphome
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: compile-${{ matrix.fixture }}-esphome-latest
+      - name: Compile
+        run: esphome compile tests/compile/${{ matrix.fixture }}.yaml

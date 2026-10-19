@@ -1,0 +1,30 @@
+esphome:
+  name: host-reconnect
+
+host:
+
+logger:
+  level: INFO
+
+external_components:
+  - source:
+      type: local
+      path: ../../components
+
+uart_tcp_client:
+  id: uart_link
+  host: 127.0.0.1
+  port: 44607
+  reconnect_interval: 2s
+
+interval:
+  - interval: 100ms
+    then:
+      - lambda: |-
+          uint8_t buf[256];
+          while (id(uart_link).available()) {
+            size_t n = std::min((size_t) id(uart_link).available(), sizeof(buf));
+            if (!id(uart_link).read_array(buf, n))
+              break;
+            id(uart_link).write_array(buf, n);
+          }

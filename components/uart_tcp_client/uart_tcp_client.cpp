@@ -69,12 +69,19 @@ void UARTTCPClientComponent::connect_() {
   // If the host is a dotted-decimal IP, resolve it synchronously and
   // call connect(ip, port) directly to avoid a DNS callback that may
   // never fire (observed with AsyncTCP's dns_found on ESP32-S3).
+#if defined(USE_ESP32) || defined(USE_ESP8266)
   ip_addr_t addr;
   if (ipaddr_aton(host_.c_str(), &addr)) {
     tcp_client_.connect(addr, port_);
   } else {
     tcp_client_.connect(host_.c_str(), port_);
   }
+#else
+  // Socket-based platforms (host, and any other async_tcp fallback) have
+  // no lwIP types; their AsyncClient::connect(const char *, uint16_t)
+  // resolves the host itself.
+  tcp_client_.connect(host_.c_str(), port_);
+#endif
 }
 
 void UARTTCPClientComponent::disconnect_() {

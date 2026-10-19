@@ -1,0 +1,55 @@
+esphome:
+  name: valid-full-feature
+  friendly_name: Full feature
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: "testtesttest"
+  password: "testtesttest"
+
+api:
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../../components
+
+uart:
+  id: hw_uart
+  tx_pin: GPIO17
+  rx_pin: GPIO18
+  baud_rate: 9600
+
+uart_tcp_client:
+  - id: tcp_cl
+    host: 192.168.1.100
+    port: 5000
+    rx_buffer_size: 2048
+    reconnect_interval: 10s
+    stall_timeout: 30s
+
+uart_tcp_server:
+  - id: fan_srv
+    port: 5001
+    max_clients: 8
+    rx_buffer_size: 2048
+    tx_buffer_size: 1024
+    client_mode: fanout
+    idle_timeout: 60s
+  - id: ex_srv
+    port: 5002
+    max_clients: 1
+    client_mode: exclusive
+
+uart_bridge:
+  uarts:
+    - hw_uart
+    - uart: tcp_cl
+      flow: to_bridge
+    - uart: fan_srv
+      flow: from_bridge

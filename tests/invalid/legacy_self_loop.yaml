@@ -1,0 +1,29 @@
+esphome:
+  name: invalid-legacy-self-loop
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: "testtesttest"
+  password: "testtesttest"
+
+api:
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../../components
+
+uart:
+  id: uart_a
+  tx_pin: GPIO17
+  rx_pin: GPIO18
+  baud_rate: 9600
+
+uart_bridge:
+  uart_a: uart_a
+  uart_b: uart_a

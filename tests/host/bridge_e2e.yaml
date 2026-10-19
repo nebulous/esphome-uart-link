@@ -1,0 +1,27 @@
+esphome:
+  name: host-bridge-e2e
+
+host:
+
+logger:
+  level: INFO
+
+external_components:
+  - source:
+      type: local
+      path: ../../components
+
+uart_tcp_client:
+  - id: tcp_a
+    host: 127.0.0.1
+    port: 44605
+    reconnect_interval: 1s
+  - id: tcp_b
+    host: 127.0.0.1
+    port: 44606
+    reconnect_interval: 1s
+
+uart_bridge:
+  uarts:
+    - tcp_a
+    - tcp_b
